@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../AuthContext.jsx';
 
+const trainerRoles = ['Personal Trainer', 'Yoga Coach'];
 const goals = ['Weight Loss', 'Strength', 'Muscle Gain', 'Mobility', 'Sport Specific', 'General Fitness'];
 const times = ['Morning', 'Afternoon', 'Evening', 'Flexible'];
 
@@ -25,7 +26,7 @@ export default function MemberPortal() {
   const load = () => {
     api('/requests').then(({ requests }) => setRequests(requests)).catch((e) => setError(e.message));
     api('/staff')
-      .then(({ staff }) => setTrainers(staff.filter((s) => s.role === 'Personal Trainer')))
+      .then(({ staff }) => setTrainers(staff.filter((s) => trainerRoles.includes(s.role))))
       .catch(() => {});
   };
 

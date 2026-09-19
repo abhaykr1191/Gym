@@ -48,4 +48,16 @@ cd client && npm install && npm run dev    # http://localhost:5173
 | POST   | `/api/requests/:id/reject`  | owner  | decline a request                    |
 | GET    | `/api/stats`                | owner  | dashboard counters                   |
 
-Authentication uses in-memory bearer tokens and plaintext demo passwords — fine for a prototype, replace with hashed passwords and signed sessions before production.
+## Configuration
+
+| Variable          | Default                 | Purpose                                     |
+| ----------------- | ----------------------- | ------------------------------------------- |
+| `PORT`            | `3001`                  | API port                                    |
+| `DB_FILE`         | `server/data.json`      | store location                              |
+| `CLIENT_ORIGIN`   | `http://localhost:5173` | allowed CORS origins (comma separated)      |
+| `OWNER_EMAIL`     | `owner@ironhouse.fit`   | seeded owner login                          |
+| `OWNER_PASSWORD`  | `owner123`              | seeded owner password — set this on deploy  |
+| `SESSION_TTL_MS`  | `43200000` (12h)        | bearer token lifetime                       |
+| `AUTH_RATE_LIMIT` | `20`                    | login/register attempts per IP per 15 min   |
+
+Passwords are hashed with scrypt. Sessions are in-memory bearer tokens (one per user, expiring after `SESSION_TTL_MS`), so all sessions end when the process restarts — swap in signed cookies or a session store before production.

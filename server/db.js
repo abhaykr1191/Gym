@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hashPassword } from './passwords.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const file = process.env.DB_FILE || path.join(dir, 'data.json');
@@ -10,8 +11,8 @@ const seed = () => ({
     {
       id: 'u-owner',
       name: 'Alex Carter',
-      email: 'owner@ironhouse.fit',
-      password: 'owner123',
+      email: process.env.OWNER_EMAIL || 'owner@ironhouse.fit',
+      password: hashPassword(process.env.OWNER_PASSWORD || 'owner123'),
       role: 'owner',
       phone: '555-0100',
       createdAt: '2024-01-05T09:00:00.000Z',
@@ -21,7 +22,7 @@ const seed = () => ({
       id: 'u-mia',
       name: 'Mia Nguyen',
       email: 'mia@example.com',
-      password: 'member123',
+      password: hashPassword('member123'),
       role: 'member',
       phone: '555-0111',
       plan: 'Premium',
@@ -32,7 +33,7 @@ const seed = () => ({
       id: 'u-raj',
       name: 'Raj Patel',
       email: 'raj@example.com',
-      password: 'member123',
+      password: hashPassword('member123'),
       role: 'member',
       phone: '555-0112',
       plan: 'Basic',
@@ -118,7 +119,9 @@ const load = () => {
 };
 
 const save = () => {
-  fs.writeFileSync(file, JSON.stringify(state, null, 2));
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, file);
 };
 
 export const db = {
