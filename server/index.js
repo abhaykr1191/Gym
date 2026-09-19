@@ -2,12 +2,56 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
 import { db, nextId } from './db.js';
+import { hashPassword, verifyPassword } from './passwords.js';
+
+const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((o) => o.trim());
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 12 * 60 * 60 * 1000;
+const TRAINER_ROLES = ['Personal Trainer', 'Yoga Coach'];
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
+app.use((req, res, next) => {
+  if (!req.body) req.body = {};
+  next();
+});
 
+/** token -> { userId, expiresAt } */
 const sessions = new Map();
+
+const pruneSessions = () => {
+  const now = Date.now();
+  for (const [token, session] of sessions) {
+    if (session.expiresAt <= now) sessions.delete(token);
+  }
+};
+setInterval(pruneSessions, 10 * 60 * 1000).unref();
+
+const startSession = (user) => {
+  pruneSessions();
+  for (const [token, session] of sessions) {
+    if (session.userId === user.id) sessions.delete(token);
+  }
+  const token = crypto.randomUUID();
+  sessions.set(token, { userId: user.id, expiresAt: Date.now() + SESSION_TTL_MS });
+  return token;
+};
+
+const attempts = new Map();
+const rateLimitAuth = (req, res, next) => {
+  const windowMs = 15 * 60 * 1000;
+  const max = Number(process.env.AUTH_RATE_LIMIT) || 20;
+  const now = Date.now();
+  const key = req.ip;
+  const record = attempts.get(key);
+  if (!record || record.resetAt <= now) {
+    attempts.set(key, { count: 1, resetAt: now + windowMs });
+    return next();
+  }
+  record.count += 1;
+  if (record.count > max) return res.status(429).json({ error: 'Too many attempts, try again later' });
+  next();
+};
 
 const publicUser = (user) => {
   if (!user) return null;
@@ -17,9 +61,11 @@ const publicUser = (user) => {
 
 const authenticate = (req, res, next) => {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
-  const userId = sessions.get(token);
-  const user = db.data.users.find((u) => u.id === userId);
-  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  const session = sessions.get(token);
+  if (session && session.expiresAt <= Date.now()) sessions.delete(token);
+  const user = session ? db.data.users.find((u) => u.id === session.userId) : null;
+  if (!user || session.expiresAt <= Date.now()) return res.status(401).json({ error: 'Not authenticated' });
+  if (!user.active) return res.status(403).json({ error: 'This account is deactivated' });
   req.user = user;
   next();
 };
@@ -29,7 +75,7 @@ const ownerOnly = (req, res, next) => {
   next();
 };
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', rateLimitAuth, (req, res) => {
   const { name, email, password, phone, plan } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
   if (db.data.users.some((u) => u.email.toLowerCase() === email.toLowerCase()))
@@ -39,7 +85,7 @@ app.post('/api/auth/register', (req, res) => {
     id: nextId('u'),
     name,
     email,
-    password,
+    password: hashPassword(password),
     phone: phone || '',
     plan: plan || 'Basic',
     role: 'member',
@@ -49,19 +95,15 @@ app.post('/api/auth/register', (req, res) => {
   db.data.users.push(user);
   db.save();
 
-  const token = crypto.randomUUID();
-  sessions.set(token, user.id);
-  res.status(201).json({ token, user: publicUser(user) });
+  res.status(201).json({ token: startSession(user), user: publicUser(user) });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', rateLimitAuth, (req, res) => {
   const { email, password } = req.body;
-  const user = db.data.users.find((u) => u.email.toLowerCase() === (email || '').toLowerCase() && u.password === password);
-  if (!user) return res.status(401).json({ error: 'Invalid email or password' });
+  const user = db.data.users.find((u) => u.email.toLowerCase() === (email || '').toLowerCase());
+  if (!user || !verifyPassword(password || '', user.password)) return res.status(401).json({ error: 'Invalid email or password' });
   if (!user.active) return res.status(403).json({ error: 'This account is deactivated' });
-  const token = crypto.randomUUID();
-  sessions.set(token, user.id);
-  res.json({ token, user: publicUser(user) });
+  res.json({ token: startSession(user), user: publicUser(user) });
 });
 
 app.get('/api/auth/me', authenticate, (req, res) => res.json({ user: publicUser(req.user) }));
@@ -118,10 +160,7 @@ app.delete('/api/staff/:id', authenticate, ownerOnly, (req, res) => {
   if (index === -1) return res.status(404).json({ error: 'Staff member not found' });
   const [removed] = db.data.staff.splice(index, 1);
   db.data.requests.forEach((r) => {
-    if (r.assignedStaffId === removed.id) {
-      r.assignedStaffId = null;
-      r.status = 'pending';
-    }
+    if (r.assignedStaffId === removed.id) clearAssignment(r, 'pending');
   });
   db.save();
   res.json({ ok: true });
@@ -141,7 +180,7 @@ app.post('/api/members', authenticate, ownerOnly, (req, res) => {
     id: nextId('u'),
     name,
     email,
-    password: password || 'member123',
+    password: hashPassword(password || 'member123'),
     phone: phone || '',
     plan: plan || 'Basic',
     role: 'member',
@@ -176,6 +215,13 @@ app.delete('/api/members/:id', authenticate, ownerOnly, (req, res) => {
 });
 
 // ---- trainer requests ----
+const clearAssignment = (request, status) => {
+  request.assignedStaffId = null;
+  request.quotedPrice = null;
+  request.assignedAt = null;
+  request.status = status;
+};
+
 const withDetails = (request) => ({
   ...request,
   member: publicUser(db.data.users.find((u) => u.id === request.memberId)),
@@ -221,6 +267,7 @@ app.post('/api/requests/:id/assign', authenticate, ownerOnly, (req, res) => {
   const staff = db.data.staff.find((s) => s.id === req.body.staffId);
   if (!staff) return res.status(400).json({ error: 'Pick a staff member to assign' });
   if (!staff.active) return res.status(400).json({ error: 'That staff member is inactive' });
+  if (!TRAINER_ROLES.includes(staff.role)) return res.status(400).json({ error: 'Only coaching staff can be assigned to a trainer request' });
 
   const quoted = req.body.quotedPrice === undefined || req.body.quotedPrice === '' ? staff.hourlyRate : Number(req.body.quotedPrice);
   if (!Number.isFinite(quoted) || quoted <= 0) return res.status(400).json({ error: 'Quoted price must be a positive number' });
@@ -236,8 +283,7 @@ app.post('/api/requests/:id/assign', authenticate, ownerOnly, (req, res) => {
 app.post('/api/requests/:id/reject', authenticate, ownerOnly, (req, res) => {
   const request = db.data.requests.find((r) => r.id === req.params.id);
   if (!request) return res.status(404).json({ error: 'Request not found' });
-  request.status = 'rejected';
-  request.assignedStaffId = null;
+  clearAssignment(request, 'rejected');
   request.notesFromOwner = req.body.reason || '';
   db.save();
   res.json({ request: withDetails(request) });
@@ -254,7 +300,7 @@ app.get('/api/stats', authenticate, ownerOnly, (req, res) => {
       members: members.length,
       activeMembers: members.filter((m) => m.active).length,
       staff: db.data.staff.length,
-      trainers: db.data.staff.filter((s) => s.role === 'Personal Trainer').length,
+      trainers: db.data.staff.filter((s) => TRAINER_ROLES.includes(s.role)).length,
       pendingRequests: requests.filter((r) => r.status === 'pending').length,
       assignedRequests: assigned.length,
       monthlyRevenue,

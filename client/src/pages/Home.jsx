@@ -68,7 +68,7 @@ export default function Home() {
                   <li key={perk}>{perk}</li>
                 ))}
               </ul>
-              <Link className="btn block" to="/register">
+              <Link className="btn block" to={`/register?plan=${encodeURIComponent(plan.name)}`}>
                 Choose {plan.name}
               </Link>
             </article>

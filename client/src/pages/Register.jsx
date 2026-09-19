@@ -1,11 +1,21 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext.jsx';
+
+const plans = ['Basic', 'Premium', 'Elite'];
 
 export default function Register() {
   const { register } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ name: '', email: '', phone: '', plan: 'Basic', password: '' });
+  const [searchParams] = useSearchParams();
+  const requestedPlan = searchParams.get('plan');
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    plan: plans.includes(requestedPlan) ? requestedPlan : 'Basic',
+    password: '',
+  });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -45,9 +55,9 @@ export default function Register() {
         <label>
           Membership plan
           <select value={form.plan} onChange={update('plan')}>
-            <option>Basic</option>
-            <option>Premium</option>
-            <option>Elite</option>
+            {plans.map((plan) => (
+              <option key={plan}>{plan}</option>
+            ))}
           </select>
         </label>
         <label>

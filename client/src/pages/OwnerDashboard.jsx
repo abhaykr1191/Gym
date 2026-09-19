@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 
+const trainerRoles = ['Personal Trainer', 'Yoga Coach'];
 const emptyStaff = { name: '', email: '', phone: '', role: 'Personal Trainer', specialties: '', hourlyRate: 50, capacity: 8 };
 const emptyMember = { name: '', email: '', phone: '', plan: 'Basic', password: '' };
 
@@ -47,7 +48,7 @@ export default function OwnerDashboard() {
     }
   };
 
-  const trainers = staff.filter((s) => s.role === 'Personal Trainer' && s.active);
+  const trainers = staff.filter((s) => trainerRoles.includes(s.role) && s.active);
   const assignedCount = (staffId) => requests.filter((r) => r.assignedStaffId === staffId && r.status === 'assigned').length;
 
   return (
